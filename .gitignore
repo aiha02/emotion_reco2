@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+
+# Virtual environment
+venv/
+.env/
+.venv/
+
+# Audio dataset (WAVなど)
+dataset/
+*.wav
+*.mp3
+*.flac
+
+# Model files
+model/
+*.pkl
+*.npy
+
+# Logs
+logs/
+*.log
+
+# Streamlit cache
+.streamlit/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
