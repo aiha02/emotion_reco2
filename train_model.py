@@ -1,99 +1,61 @@
-import os
-import numpy as np
 import pandas as pd
-import joblib
-import librosa
-from sklearn.preprocessing import LabelEncoder, StandardScaler
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier
 from feature_extractor import extract_feature
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.svm import SVC
+import joblib
+import numpy as np
+import os
 
-# ==========================
-# 1️⃣ データセットのパス設定
-# ==========================
+# パス設定
 DATASET_DIR = "dataset"
 WAV_DIR = os.path.join(DATASET_DIR, "wav")
-TRANS_DIR = os.path.join(DATASET_DIR, "trans")
 EVAL_DIR = os.path.join(DATASET_DIR, "eval")
-
 CATEGORY_FILE = os.path.join(EVAL_DIR, "category.txt")
 
-# ==========================
-# 2️⃣ データを読み込む関数
-# ==========================
-def load_dataset():
-    """
-    dataset/wav/*.wav と dataset/eval/category.txt を対応づけて
-    特徴量と感情ラベルを抽出
-    """
-    df = pd.read_csv(
-        CATEGORY_FILE,
-        header=None,
-        names=["file_id", "utt_id", "emotion1", "emotion2", "emotion3"],
-    )
+# category.txt の読み込み
+df = pd.read_csv(CATEGORY_FILE)
+df = df.dropna(subset=['fid', 'ans1'])  # 欠損除去
 
-    X, y = [], []
+# fid ごとに代表ラベルを決定（ans1 を使用）
+fid_to_label = dict(zip(df['fid'], df['ans1']))
 
-    for _, row in df.iterrows():
-        wav_name = f"{row['file_id']}.wav"
-        wav_path = os.path.join(WAV_DIR, wav_name)
+# 特徴量とラベルのリスト
+X, y = [], []
 
-        if not os.path.exists(wav_path):
-            print(f"⚠️ {wav_path} が見つかりません。スキップします。")
-            continue
-
+for fid, label in fid_to_label.items():
+    wav_path = os.path.join(WAV_DIR, f"{fid}.wav")
+    if os.path.exists(wav_path):
         try:
-            features = extract_feature(wav_path)
-            X.append(features)
-            y.append(row["emotion1"])  # メインの感情ラベル
+            feat = extract_feature(wav_path)
+            X.append(feat)
+            y.append(label)
         except Exception as e:
-            print(f"❌ {wav_name} の特徴抽出に失敗: {e}")
+            print(f"❌ Error with {fid}: {e}")
+    else:
+        print(f"⚠️ Missing file: {wav_path}")
 
-    return np.array(X), np.array(y)
+# numpy変換
+X = np.array(X)
+y = np.array(y)
 
-# ==========================
-# 3️⃣ モデルの学習
-# ==========================
-def train_model():
-    X, y = load_dataset()
+# スケーリング
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
 
-    if len(X) == 0:
-        raise ValueError("❌ データが読み込めませんでした。dataset/ のパスを確認してください。")
+# train/test分割
+X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42, stratify=y)
 
-    print(f"✅ 読み込んだサンプル数: {len(X)}")
+# モデル学習（SVM）
+clf = SVC(kernel='rbf', probability=True, class_weight='balanced')
+clf.fit(X_train, y_train)
 
-    # ラベルエンコード
-    label_encoder = LabelEncoder()
-    y_encoded = label_encoder.fit_transform(y)
+# 精度確認
+acc = clf.score(X_test, y_test)
+print(f"✅ Test Accuracy: {acc:.3f}")
 
-    # 特徴量スケーリング
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-
-    # 訓練・テスト分割
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_scaled, y_encoded, test_size=0.2, random_state=42, stratify=y_encoded
-    )
-
-    # モデル構築
-    model = RandomForestClassifier(n_estimators=150, random_state=42)
-    model.fit(X_train, y_train)
-
-    # 精度評価
-    acc = model.score(X_test, y_test)
-    print(f"🎯 テスト精度: {acc:.3f}")
-
-    # ==========================
-    # 4️⃣ モデル保存（utils.pyと連携）
-    # ==========================
-    os.makedirs("model", exist_ok=True)
-    joblib.dump(model, "model/classifier.pkl")
-    joblib.dump(scaler, "model/scaler.pkl")
-    np.save("model/labels.npy", label_encoder.classes_)
-
-    print("✅ モデルを保存しました：model/classifier.pkl")
-    print("✅ スケーラーを保存しました：model/scaler.pkl")
-    print("✅ ラベルを保存しました：model/labels.npy")
-
-if __name__ == "__main__":
-    train_model()
+# モデル保存
+os.makedirs("model", exist_ok=True)
+joblib.dump(clf, "model/classifier.pkl")
+joblib.dump(scaler, "model/scaler.pkl")
+np.save("model/labels.npy", np.unique(y))
