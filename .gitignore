@@ -34,3 +34,7 @@ Thumbs.db
 
 # Jupyter checkpoints
 .ipynb_checkpoints/
+
+# ローカル専用のデータセットを無視
+dataset/
+
