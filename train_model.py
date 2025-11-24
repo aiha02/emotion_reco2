@@ -46,6 +46,20 @@ X_scaled = scaler.fit_transform(X)
 # train/test分割
 X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42, stratify=y)
 
+from collections import Counter
+
+# ラベルの分布確認
+print("Label count:", Counter(y))
+
+# サンプル数が1以下のクラスを除外
+valid_classes = {label for label, count in Counter(y).items() if count >= 2}
+
+X = [x for x, label in zip(X, y) if label in valid_classes]
+y = [label for label in y if label in valid_classes]
+
+print("After filtering:", Counter(y))
+
+
 # モデル学習（SVM）
 clf = SVC(kernel='rbf', probability=True, class_weight='balanced')
 clf.fit(X_train, y_train)
