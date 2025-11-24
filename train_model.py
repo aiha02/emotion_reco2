@@ -6,25 +6,33 @@ from sklearn.svm import SVC
 import joblib
 import numpy as np
 import os
+from collections import Counter
 
-# パス設定
+# ==========================
+# 1. パス設定
+# ==========================
 DATASET_DIR = "dataset"
 WAV_DIR = os.path.join(DATASET_DIR, "wav")
 EVAL_DIR = os.path.join(DATASET_DIR, "eval")
 CATEGORY_FILE = os.path.join(EVAL_DIR, "category.txt")
 
-# category.txt の読み込み
+# ==========================
+# 2. category.txt の読み込み
+# ==========================
 df = pd.read_csv(CATEGORY_FILE)
 df = df.dropna(subset=['fid', 'ans1'])  # 欠損除去
 
-# fid ごとに代表ラベルを決定（ans1 を使用）
+# fid ごとに代表ラベルを使用
 fid_to_label = dict(zip(df['fid'], df['ans1']))
 
-# 特徴量とラベルのリスト
+# ==========================
+# 3. 特徴量抽出
+# ==========================
 X, y = [], []
 
 for fid, label in fid_to_label.items():
     wav_path = os.path.join(WAV_DIR, f"{fid}.wav")
+
     if os.path.exists(wav_path):
         try:
             feat = extract_feature(wav_path)
@@ -39,37 +47,53 @@ for fid, label in fid_to_label.items():
 X = np.array(X)
 y = np.array(y)
 
-# スケーリング
+# ==========================
+# 4. クラス数が1のクラスを除外（重要）
+# ==========================
+print("Label count BEFORE:", Counter(y))
+
+valid_classes = {lab for lab, cnt in Counter(y).items() if cnt >= 2}
+
+X = np.array([x for x, lab in zip(X, y) if lab in valid_classes])
+y = np.array([lab for lab in y if lab in valid_classes])
+
+print("Label count AFTER:", Counter(y))
+
+# ==========================
+# 5. スケーリング
+# ==========================
 scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)
 
-# train/test分割
-X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42, stratify=y)
+# ==========================
+# 6. train/test分割
+# ==========================
+X_train, X_test, y_train, y_test = train_test_split(
+    X_scaled,
+    y,
+    test_size=0.2,
+    random_state=42,
+    stratify=y
+)
 
-from collections import Counter
-
-# ラベルの分布確認
-print("Label count:", Counter(y))
-
-# サンプル数が1以下のクラスを除外
-valid_classes = {label for label, count in Counter(y).items() if count >= 2}
-
-X = [x for x, label in zip(X, y) if label in valid_classes]
-y = [label for label in y if label in valid_classes]
-
-print("After filtering:", Counter(y))
-
-
-# モデル学習（SVM）
+# ==========================
+# 7. モデル学習（SVM）
+# ==========================
 clf = SVC(kernel='rbf', probability=True, class_weight='balanced')
 clf.fit(X_train, y_train)
 
-# 精度確認
+# ==========================
+# 8. 精度確認
+# ==========================
 acc = clf.score(X_test, y_test)
 print(f"✅ Test Accuracy: {acc:.3f}")
 
-# モデル保存
+# ==========================
+# 9. モデル保存
+# ==========================
 os.makedirs("model", exist_ok=True)
 joblib.dump(clf, "model/classifier.pkl")
 joblib.dump(scaler, "model/scaler.pkl")
 np.save("model/labels.npy", np.unique(y))
+
+print("🎉 Training complete! Model saved.")
