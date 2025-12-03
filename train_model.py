@@ -1,3 +1,4 @@
+import argparse
 import pandas as pd
 from feature_extractor import extract_feature
 from sklearn.preprocessing import StandardScaler
@@ -8,6 +9,18 @@ import numpy as np
 import os
 from collections import Counter
 from sklearn.pipeline import make_pipeline
+import sys
+
+# ==========================
+# CLI: --force で再学習を強制
+# ==========================
+parser = argparse.ArgumentParser(description="Train emotion recognition model (skip if already trained).")
+parser.add_argument(
+    "--force",
+    action="store_true",
+    help="Force retraining even if model files already exist.",
+)
+args = parser.parse_args()
 
 # ==========================
 # 1. パス設定
@@ -17,8 +30,24 @@ WAV_DIR = os.path.join(DATASET_DIR, "wav")
 EVAL_DIR = os.path.join(DATASET_DIR, "eval")
 CATEGORY_FILE = os.path.join(EVAL_DIR, "category.txt")
 
+MODEL_DIR = "model"
+CLASSIFIER_FILE = os.path.join(MODEL_DIR, "classifier.pkl")
+SCALER_FILE = os.path.join(MODEL_DIR, "scaler.pkl")
+LABELS_FILE = os.path.join(MODEL_DIR, "labels.npy")
+
 # ==========================
-# 2. category.txt の読み込み
+# 2. 既に学習済みモデルがあれば何もしない（--force で無視）
+# ==========================
+if not args.force and os.path.exists(CLASSIFIER_FILE) and os.path.exists(SCALER_FILE) and os.path.exists(LABELS_FILE):
+    print("ℹ️  モデルファイルが既に存在します。再学習はスキップします。")
+    print(f"    {CLASSIFIER_FILE}")
+    print(f"    {SCALER_FILE}")
+    print(f"    {LABELS_FILE}")
+    print("必要なら --force を付けて再学習してください。")
+    sys.exit(0)
+
+# ==========================
+# 3. category.txt の読み込み
 # ==========================
 df = pd.read_csv(CATEGORY_FILE)
 df = df.dropna(subset=['fid', 'ans1'])  # 欠損除去
@@ -27,7 +56,7 @@ df = df.dropna(subset=['fid', 'ans1'])  # 欠損除去
 fid_to_label = dict(zip(df['fid'], df['ans1']))
 
 # ==========================
-# 3. 特徴量抽出
+# 4. 特徴量抽出
 # ==========================
 X, y = [], []
 
@@ -49,7 +78,7 @@ X = np.array(X)
 y = np.array(y)
 
 # ==========================
-# 4. クラス数が1のクラスを除外（重要）
+# 5. クラス数が1のクラスを除外（重要）
 #    交差検証のために各クラスに最低2サンプル必要
 # ==========================
 print("Label count BEFORE:", Counter(y))
@@ -72,7 +101,7 @@ if n_classes < 2:
     raise ValueError(f"訓練できるクラスが不足しています。現在のクラス数={n_classes}、サンプル数={n_samples}")
 
 # ==========================
-# 5. 層化交差検証（評価）
+# 6. 層化交差検証（評価）
 #    データが少ないので StratifiedKFold を使って安定評価する
 # ==========================
 # 各クラスの最小サンプル数を求め、それに合わせて n_splits を決定
@@ -100,8 +129,7 @@ print(f"✅ Cross-validation accuracy scores: {scores}")
 print(f"✅ CV mean accuracy: {scores.mean():.4f} ± {scores.std():.4f}")
 
 # ==========================
-# 6. 最終モデルを全データで学習して保存
-#    実行時には全データで学習してデプロイ用モデルを作るのが一般的
+# 7. 最終モデルを全データで学習して保存
 # ==========================
 # scaler を個別に保存したかったので、pipeline ではなく個別に fit して保存する
 scaler = StandardScaler()
@@ -114,11 +142,11 @@ acc = clf.score(X_scaled, y)
 print(f"✅ Training accuracy on full dataset: {acc:.4f}")
 
 # ==========================
-# 7. モデル保存
+# 8. モデル保存
 # ==========================
-os.makedirs("model", exist_ok=True)
-joblib.dump(clf, "model/classifier.pkl")
-joblib.dump(scaler, "model/scaler.pkl")
-np.save("model/labels.npy", np.unique(y))
+os.makedirs(MODEL_DIR, exist_ok=True)
+joblib.dump(clf, CLASSIFIER_FILE)
+joblib.dump(scaler, SCALER_FILE)
+np.save(LABELS_FILE, np.unique(y))
 
-print("🎉 Training complete! Model and scaler saved in ./model/")
+print(f"🎉 Training complete! Model and scaler saved in ./{MODEL_DIR}/")
