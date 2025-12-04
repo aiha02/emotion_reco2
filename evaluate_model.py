@@ -8,6 +8,7 @@ from feature_extractor import extract_feature
 from sklearn.preprocessing import StandardScaler
 from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
+from collections import Counter
 
 # ============================
 # 1) モデル読み込み
@@ -38,8 +39,10 @@ for fid, label in fid_to_label.items():
             feat = extract_feature(wav_path)
             X.append(feat)
             y.append(label)
-        except:
-            print(f"❌ Feature error: {fid}")
+        except Exception as e:
+            print(f"❌ Feature error: {fid} ({e})")
+    else:
+        print(f"⚠️ Missing file: {wav_path}")
 
 X = np.array(X)
 y = np.array(y)
@@ -66,11 +69,13 @@ print(f"\n=== Accuracy ===\n{acc:.4f}")
 # 6) Classification Report
 # ============================
 print("\n=== Classification Report ===")
-report = classification_report(y, y_pred, digits=4)
+# zero_division=0 で undefined metric の表示を制御
+report = classification_report(y, y_pred, digits=4, zero_division=0)
 print(report)
 
-# 保存
-with open("model/classification_report.txt", "w") as f:
+# 保存（model ディレクトリが無ければ作る）
+os.makedirs("model", exist_ok=True)
+with open("model/classification_report.txt", "w", encoding="utf-8") as f:
     f.write(report)
 
 # ============================
@@ -81,37 +86,55 @@ cm_df = pd.DataFrame(cm, index=labels, columns=labels)
 print("\n=== Confusion Matrix ===")
 print(cm_df)
 
-cm_df.to_csv("model/confusion_matrix.csv")
+cm_df.to_csv("model/confusion_matrix.csv", encoding="utf-8")
 
 # ============================
-# 8) Cross Validation (5-fold)
+# 8) Cross Validation (adjust n_splits or skip if too few samples)
 # ============================
-skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+counts = Counter(y)
+print("\nClass distribution:", counts)
+min_count = min(counts.values()) if counts else 0
 
-cv_scores = cross_val_score(clf, X_scaled, y, cv=skf)
-print("\n=== 5-Fold CV Scores ===")
-print(cv_scores)
-print("Mean CV Accuracy:", cv_scores.mean())
+if min_count < 2:
+    print("\n=== Skipping cross-validation ===")
+    print("At least one class has fewer than 2 samples; StratifiedKFold requires at least 2 samples per class.")
+else:
+    # n_splits は 2 以上、かつ各クラスの最小サンプル数以下にする
+    n_splits = min(5, min_count)
+    if n_splits < 2:
+        print("\n=== Skipping cross-validation ===")
+        print("After adjustment, n_splits < 2; cannot run StratifiedKFold.")
+    else:
+        print(f"\n=== Running StratifiedKFold with n_splits = {n_splits} ===")
+        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+        try:
+            cv_scores = cross_val_score(clf, X_scaled, y, cv=skf)
+            print("\n=== Cross-validation scores ===")
+            print(cv_scores)
+            print("Mean CV Accuracy:", cv_scores.mean())
+        except Exception as e:
+            print("Error during cross-validation:", e)
 
 # ============================
 # 9) t-SNE 可視化
 # ============================
 print("\nRunning t-SNE (this may take 20–40 seconds)...")
+try:
+    tsne = TSNE(n_components=2, random_state=42, perplexity=5)
+    X_embedded = tsne.fit_transform(X_scaled)
 
-tsne = TSNE(n_components=2, random_state=42, perplexity=5)
-X_embedded = tsne.fit_transform(X_scaled)
+    plt.figure(figsize=(8, 6))
+    for lab in labels:
+        idx = np.where(y == lab)
+        plt.scatter(X_embedded[idx, 0], X_embedded[idx, 1], label=lab, s=40)
 
-plt.figure(figsize=(8, 6))
-for lab in labels:
-    idx = np.where(y == lab)
-    plt.scatter(X_embedded[idx, 0], X_embedded[idx, 1], label=lab, s=40)
-
-plt.legend()
-plt.title("t-SNE visualization of emotion features")
-plt.savefig("model/tsne_plot.png")
-plt.close()
-
-print("t-SNE saved to model/tsne_plot.png")
+    plt.legend()
+    plt.title("t-SNE visualization of emotion features")
+    plt.savefig("model/tsne_plot.png")
+    plt.close()
+    print("t-SNE saved to model/tsne_plot.png")
+except Exception as e:
+    print("t-SNE failed:", e)
 
 # ============================
 # 終了
