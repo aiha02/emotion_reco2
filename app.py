@@ -9,9 +9,9 @@ import soundfile as sf
 # ===============================
 # ページ設定
 # ===============================
-st.set_page_config(page_title="日本語音声感情認識（Web版）", layout="centered")
+st.set_page_config(page_title="音声感情認識（Web版）", layout="centered")
 
-st.title("🎙️ 日本語音声感情認識 — Webデモ")
+st.title("🎙️ 音声感情認識 — Webデモ")
 st.markdown("WAV / MP3 ファイルをアップロード、またはマイクから録音して感情を推定します。<br>予測される感情: 😊 喜び、😠 怒り、😢 悲しみ、😐 中立", unsafe_allow_html=True)
 
 # ===============================
@@ -84,4 +84,4 @@ else:
     st.info('⏳ 音声をアップロードまたは録音してください。')
 
 st.markdown("---")
-st.caption("© 2025 日本語音声感情認識プロジェクト")
+st.caption("© bp22008 総合研究")
