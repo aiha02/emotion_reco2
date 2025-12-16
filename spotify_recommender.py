@@ -19,8 +19,8 @@ class SpotifyRecommender:
         Spotify Recommendation API 用クラス
         環境変数 or 引数から認証情報を取得
         """
-        self.client_id = client_id or os.getenv("SPOTIFY_CLIENT_ID")
-        self.client_secret = client_secret or os.getenv("SPOTIFY_CLIENT_SECRET")
+        self.client_id = client_id or os.getenv("76d60706dbc7413a938dd7964f922bae")
+        self.client_secret = client_secret or os.getenv("004ddd3583e84d3aa1b480e871f39b13")
 
         if not self.client_id or not self.client_secret:
             raise ValueError("Spotify client_id / client_secret が設定されていません")
