@@ -51,7 +51,7 @@ class SpotifyRecommender:
 
         if seed_genres is None:
             # 日本で無難に使えるジャンル
-            seed_genres = ["pop", "j-pop", "rock"]
+            seed_genres = ["pop", "rock", "indie"]
 
         # Spotify Recommendation API 用パラメータ
         params = {
