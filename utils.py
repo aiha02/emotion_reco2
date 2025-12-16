@@ -1,16 +1,21 @@
 import os
 import numpy as np
 import joblib
-from feature_extractor import extract_feature
+import librosa
+from feature_extractor import extract_feature_raw
 
-# model ディレクトリをこのファイル基準で解決（カレントディレクトリ依存を避ける）
+# ============================
+# パス解決（このファイル基準）
+# ============================
 BASE_DIR = os.path.dirname(__file__)
 MODEL_DIR = os.path.join(BASE_DIR, "model")
 MODEL_PATH = os.path.join(MODEL_DIR, "classifier.pkl")
 SCALER_PATH = os.path.join(MODEL_DIR, "scaler.pkl")
 LABELS_PATH = os.path.join(MODEL_DIR, "labels.npy")
 
-# キャッシュ用（プロセス単位）
+# ============================
+# キャッシュ
+# ============================
 _model = None
 _scaler = None
 _labels = None
@@ -25,8 +30,7 @@ def _ensure_files_exist():
 
 def load_model():
     """
-    モデル・スケーラ・ラベルをキャッシュして返す。
-    予測ごとにファイルを再ロードしないようにする。
+    モデル・スケーラ・ラベルを一度だけロード（キャッシュ）
     """
     global _model, _scaler, _labels
     if _model is None or _scaler is None or _labels is None:
@@ -38,41 +42,30 @@ def load_model():
 
 def predict_from_file(file_path):
     """
-    file_path の音声ファイルから特徴量抽出→スケーリング→予測を行う。
+    音声ファイル → 特徴量 → スケーリング → 感情予測
     戻り値:
-      pred_label: 予測されたラベル文字列（labels に基づく）
-      proba: 各ラベルの確率配列（predict_proba が使えない場合は None）
-      labels: ラベル一覧（predict 出力の順序）
+      pred_label : str
+      proba      : np.ndarray | None
+      labels     : list[str]
     """
     model, scaler, labels = load_model()
-    feat = extract_feature(file_path)
+
+    # 音声ロード
+    y, sr = librosa.load(file_path, sr=None, mono=True)
+
+    # 特徴量抽出（学習と同一）
+    feat = extract_feature_raw(y, sr)
     X = scaler.transform([feat])
 
-    proba = None
+    # 予測
+    raw_pred = model.predict(X)[0]
+
     try:
         proba = model.predict_proba(X)[0]
     except Exception:
         proba = None
 
-    raw_pred = model.predict(X)[0]
-
-    # raw_pred が index なのかラベル文字列なのか両方に対応してラベル文字列へ変換
-    pred_label = None
-    try:
-        # numpy integer の可能性もあるので int 変換を試みる
-        if isinstance(raw_pred, (int, np.integer)):
-            pred_label = labels[int(raw_pred)]
-        else:
-            # raw_pred がラベル文字列ならそのまま。数値文字列の場合に備えて int 変換も試す。
-            if raw_pred in labels:
-                pred_label = raw_pred
-            else:
-                try:
-                    idx = int(raw_pred)
-                    pred_label = labels[idx]
-                except Exception:
-                    pred_label = str(raw_pred)
-    except Exception:
-        pred_label = str(raw_pred)
+    # ラベル整形（SVC は文字列を直接返す想定）
+    pred_label = str(raw_pred)
 
     return pred_label, proba, labels
