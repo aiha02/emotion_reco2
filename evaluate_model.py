@@ -31,39 +31,71 @@ MODEL_DIR = "model"
 # ============================
 clf = joblib.load(os.path.join(MODEL_DIR, "classifier.pkl"))
 scaler = joblib.load(os.path.join(MODEL_DIR, "scaler.pkl"))
-labels = np.load(os.path.join(MODEL_DIR, "labels.npy"))
+labels = np.load(os.path.join(MODEL_DIR, "labels.npy"), allow_pickle=True)
 
 # ============================
-# 3. 特徴量抽出（学習と同一）
+# 3. クラス統合ルール（学習と同一）
+# ============================
+EMOTION_MAP = {
+    "JOY": "POS", "ACC": "POS",
+    "ANG": "NEG_H", "DIS": "NEG_H",
+    "SAD": "NEG_L", "FEA": "NEG_L",
+    "NEU": "NEU",
+    "ANT": "OTH", "SUR": "OTH", "OTH": "OTH",
+}
+
+def map_emotion(label):
+    return EMOTION_MAP.get(label, None)
+
+# ============================
+# 4. 特徴量抽出（Δ / ΔΔ 含む：260次元）
 # ============================
 def extract_feature_raw(y, sr):
+    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=40)
+    delta = librosa.feature.delta(mfcc)
+    delta2 = librosa.feature.delta(mfcc, order=2)
+
+    mfcc_m = mfcc.mean(axis=1)
+    delta_m = delta.mean(axis=1)
+    delta2_m = delta2.mean(axis=1)
+
     stft = np.abs(librosa.stft(y))
-    mfcc = np.mean(librosa.feature.mfcc(y=y, sr=sr, n_mfcc=40).T, axis=0)
-    chroma = np.mean(librosa.feature.chroma_stft(S=stft, sr=sr).T, axis=0)
-    mel = np.mean(librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128).T, axis=0)
-    return np.hstack([mfcc, chroma, mel])
+    chroma = librosa.feature.chroma_stft(S=stft, sr=sr).mean(axis=1)
+    mel = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128).mean(axis=1)
+
+    return np.hstack([mfcc_m, delta_m, delta2_m, chroma, mel])
 
 # ============================
-# 4. category（多数決）
+# 5. category（多数決 → クラス統合）
 # ============================
 cat = pd.read_csv(CATEGORY_FILE)
 
 def majority(row):
     return Counter([row.ans1, row.ans2, row.ans3]).most_common(1)[0][0]
 
-cat["label"] = cat.apply(majority, axis=1)
-label_map = {(r.fid, str(r.uid).zfill(3)): r.label for _, r in cat.iterrows()}
+cat["raw_label"] = cat.apply(majority, axis=1)
+cat["label"] = cat["raw_label"].apply(map_emotion)
+cat = cat.dropna(subset=["label"])
+
+label_map = {
+    (r.fid, str(r.uid).zfill(3)): r.label
+    for _, r in cat.iterrows()
+}
 
 # ============================
-# 5. intensity（平均）
+# 6. intensity（平均）
 # ============================
 inten = pd.read_csv(INTENSITY_FILE)
 inten_cols = [c for c in inten.columns if c.startswith("E")]
 inten["mean_intensity"] = inten[inten_cols].mean(axis=1)
-inten_map = {(r.fid, str(r.uid).zfill(3)): r.mean_intensity for _, r in inten.iterrows()}
+
+inten_map = {
+    (r.fid, str(r.uid).zfill(3)): r.mean_intensity
+    for _, r in inten.iterrows()
+}
 
 # ============================
-# 6. 発話単位で評価データ作成
+# 7. 発話単位で評価データ作成
 # ============================
 X, y_true, intensity_true = [], [], []
 
@@ -82,8 +114,11 @@ for trans_file in os.listdir(TRANS_DIR):
 
     with open(trans_path, encoding="utf-8") as f:
         for line in f:
-            uid, start, end, *_ = line.strip().split(",")
-            start, end = float(start), float(end)
+            cols = line.strip().split(",")
+            if len(cols) < 3:
+                continue
+
+            uid, start, end = cols[0], float(cols[1]), float(cols[2])
 
             if end - start < 0.2:
                 continue
@@ -107,22 +142,25 @@ print("評価サンプル数:", len(y_true))
 print("クラス分布:", Counter(y_true))
 
 # ============================
-# 7. 予測
+# 8. 予測
 # ============================
 X_scaled = scaler.transform(X)
 y_pred = clf.predict(X_scaled)
 
 # ============================
-# 8. 分類評価（卒論必須）
+# 9. 分類評価
 # ============================
 acc = accuracy_score(y_true, y_pred)
-report = classification_report(y_true, y_pred, digits=4, zero_division=0)
+report = classification_report(
+    y_true, y_pred, labels=labels, digits=4, zero_division=0
+)
 cm = confusion_matrix(y_true, y_pred, labels=labels)
 
 print("\nAccuracy:", acc)
 print("\nClassification Report:\n", report)
 
 os.makedirs(MODEL_DIR, exist_ok=True)
+
 with open(os.path.join(MODEL_DIR, "classification_report.txt"), "w", encoding="utf-8") as f:
     f.write(report)
 
@@ -131,16 +169,16 @@ pd.DataFrame(cm, index=labels, columns=labels).to_csv(
 )
 
 # ============================
-# 9. 強度誤差（卒論で差がつく）
+# 10. 感情強度 MAE
 # ============================
 proba = clf.predict_proba(X_scaled)
-pred_intensity = proba.max(axis=1) * 5  # 疑似強度
+pred_intensity = proba.max(axis=1) * 5  # 疑似強度（1〜5）
 
 mae = mean_absolute_error(intensity_true, pred_intensity)
 print("Intensity MAE:", mae)
 
 # ============================
-# 10. t-SNE（論文用図）
+# 11. t-SNE（論文用図）
 # ============================
 tsne = TSNE(n_components=2, random_state=42, perplexity=10)
 X_embedded = tsne.fit_transform(X_scaled)
@@ -151,7 +189,7 @@ for lab in labels:
     plt.scatter(X_embedded[idx, 0], X_embedded[idx, 1], label=lab, s=10)
 
 plt.legend()
-plt.title("t-SNE of Utterance-level Emotion Features")
+plt.title("t-SNE of Utterance-level Emotion Features (Merged Classes)")
 plt.savefig(os.path.join(MODEL_DIR, "tsne_plot.png"))
 plt.close()
 
