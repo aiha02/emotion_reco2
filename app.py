@@ -1,98 +1,114 @@
+# app.py
 import streamlit as st
 import tempfile
 import os
-import matplotlib.pyplot as plt
 import numpy as np
-from utils import predict_from_file
-from feature_extractor import extract_feature
-import soundfile as sf
+import matplotlib.pyplot as plt
 
-# ===============================
+from utils import predict_from_file
+from emotion_state import emotion_state_to_audio_features
+from spotify_recommender import SpotifyRecommender
+
+# =====================================
 # ページ設定
-# ===============================
+# =====================================
 st.set_page_config(
-    page_title="音声感情認識（Web版）",
-    layout="centered"
+    page_title="音声感情 × Spotify 楽曲推薦",
+    layout="centered",
 )
 
-st.title("🎙️ 音声感情認識 — Webデモ")
+st.title("🎙️ 音声感情認識 × 🎵 Spotify 楽曲推薦")
 st.markdown(
     """
-WAV / MP3 / M4A / OGG ファイルをアップロード、  
-またはマイクから録音して感情を推定します。
-""",
-    unsafe_allow_html=True
+音声から **感情・強度** を推定し、  
+その感情状態に合わせた **Spotify 楽曲** を推薦します。
+"""
 )
 
-# ===============================
-# 音声ファイルアップロード
-# ===============================
+# =====================================
+# 音声アップロード
+# =====================================
 uploaded = st.file_uploader(
-    "音声ファイルをアップロード",
-    type=["wav", "mp3", "m4a", "ogg"]
+    "音声ファイルをアップロード（wav / mp3）",
+    type=["wav", "mp3", "m4a", "ogg"],
 )
 
-# ===============================
-# マイク録音（streamlit-audiorec）
-# ===============================
-uploaded_file_path = None
-try:
-    import streamlit_audiorec as sar
-    st.info("🎤 マイク録音が利用可能です")
-    rec = sar.st_audiorec()
-    if rec is not None and len(rec) > 0:
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-        tmp.write(rec)
-        tmp.close()
-        uploaded_file_path = tmp.name
-except Exception:
-    st.info("⚠️ マイク録音は利用できません")
+audio_path = None
+if uploaded:
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    tmp.write(uploaded.read())
+    tmp.close()
+    audio_path = tmp.name
 
-# ===============================
-# ファイルアップロード処理
-# ===============================
-if uploaded is not None:
-    suffix = os.path.splitext(uploaded.name)[1]
-    tfile = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-    tfile.write(uploaded.read())
-    tfile.close()
-    uploaded_file_path = tfile.name
+# =====================================
+# 推論
+# =====================================
+if audio_path:
+    st.audio(audio_path)
 
-# ===============================
-# 推論処理
-# ===============================
-if uploaded_file_path is not None:
-    st.audio(open(uploaded_file_path, "rb").read())
-    st.write("🎧 感情を推定しています...")
+    with st.spinner("🎧 感情を解析しています..."):
+        pred_label, proba, labels = predict_from_file(audio_path)
+
+    # -----------------------------
+    # 感情確率の表示
+    # -----------------------------
+    st.subheader("📊 感情推定結果")
+
+    prob_dict = dict(zip(labels, proba))
+    st.write("**予測感情:**", pred_label)
+
+    fig, ax = plt.subplots(figsize=(6, 3))
+    ax.bar(prob_dict.keys(), prob_dict.values())
+    ax.set_ylim(0, 1)
+    ax.set_ylabel("Probability")
+    ax.set_title("Emotion Probability")
+    st.pyplot(fig)
+
+    # -----------------------------
+    # 強度（疑似推定）
+    # -----------------------------
+    intensity = np.max(proba) * 5.0
+    st.subheader("🔥 感情強度")
+    st.progress(intensity / 5.0)
+    st.write(f"推定強度: **{intensity:.2f} / 5**")
+
+    # -----------------------------
+    # 感情 → Audio Feature
+    # -----------------------------
+    audio_features = emotion_state_to_audio_features(
+        emotion_probs=prob_dict,
+        intensity=intensity,
+    )
+
+    st.subheader("🎚️ 推薦用オーディオ特徴量")
+    st.json(audio_features)
+
+    # -----------------------------
+    # Spotify 推薦
+    # -----------------------------
+    st.subheader("🎵 おすすめ楽曲")
 
     try:
-        pred, proba, labels = predict_from_file(uploaded_file_path)
+        recommender = SpotifyRecommender()
+        tracks = recommender.recommend_tracks(
+            audio_features,
+            limit=8,
+        )
 
-        st.header(f"🎯 予測された感情: {pred}")
-
-        if proba is not None:
-            st.subheader("感情ごとの確率")
-            for lab, p in zip(labels, proba):
-                st.write(f"- {lab}: {p:.3f}")
-
-        # ===============================
-        # 特徴量可視化（MFCC）
-        # ===============================
-        feat = extract_feature(uploaded_file_path)
-        mfcc = feat[:40]
-
-        fig, ax = plt.subplots(figsize=(6, 2))
-        ax.plot(mfcc)
-        ax.set_title("MFCC (mean)")
-        ax.set_xlabel("Coefficient")
-        ax.set_ylabel("Value")
-        st.pyplot(fig)
+        for t in tracks:
+            st.markdown(
+                f"🎶 **{t['track_name']}**  \n"
+                f"👤 {t['artist']}  \n"
+                f"[🔗 Spotifyで開く]({t['external_url']})"
+            )
+            if t["preview_url"]:
+                st.audio(t["preview_url"])
+            st.markdown("---")
 
     except Exception as e:
-        st.error(f"❌ 予測中にエラーが発生しました: {e}")
+        st.error(f"Spotify 推薦でエラーが発生しました: {e}")
 
 else:
-    st.info("⏳ 音声をアップロードまたは録音してください")
+    st.info("音声ファイルをアップロードしてください。")
 
-st.markdown("---")
-st.caption("© bp22008 卒業研究デモ")
+st.caption("© Graduation Research Demo | Emotion-based Music Recommendation")
