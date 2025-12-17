@@ -1,5 +1,4 @@
 # spotify_recommender.py
-import os
 import numpy as np
 from typing import Dict, List
 
@@ -12,6 +11,9 @@ class SpotifyRecommender:
     """
     Spotify Audio Features を用いた
     自前・感情適合楽曲推薦クラス
+
+    - Client Credentials Flow を使用
+    - market を明示指定（地域制限による 404 対策）
     """
 
     # 使用する audio feature 順序（重要）
@@ -24,7 +26,9 @@ class SpotifyRecommender:
         "tempo",
     ]
 
-    def __init__(self):
+    def __init__(self, market: str = "JP"):
+        self.market = market
+
         auth = SpotifyClientCredentials()
         self.sp = spotipy.Spotify(auth_manager=auth)
 
@@ -32,7 +36,7 @@ class SpotifyRecommender:
         self.tempo_min = 60.0
         self.tempo_max = 180.0
 
-        # 候補曲を集めるプレイリスト（公式・安全）
+        # 候補曲を集めるプレイリスト（公式・比較的安定）
         self.seed_playlists = [
             "37i9dQZF1DX4WYpdgoIcn6",  # Mood Booster
             "37i9dQZF1DX3rxVfibe1L0",  # Mood Ring
@@ -85,18 +89,27 @@ class SpotifyRecommender:
     # internal
     # ======================================================
     def _collect_candidate_tracks(self, max_tracks: int = 200):
+        """
+        seed_playlists から楽曲候補を収集
+        market を明示指定して 404 を回避
+        """
         tracks = {}
 
         for pid in self.seed_playlists:
-            results = self.sp.playlist_items(
-                pid,
-                additional_types=["track"],
-                limit=100
-            )
+            try:
+                results = self.sp.playlist_items(
+                    pid,
+                    additional_types=["track"],
+                    limit=100,
+                    market=self.market,
+                )
+            except Exception as e:
+                print(f"プレイリスト取得失敗 ({pid}):", e)
+                continue
 
-            for item in results["items"]:
+            for item in results.get("items", []):
                 track = item.get("track")
-                if not track or track["id"] is None:
+                if not track or track.get("id") is None:
                     continue
 
                 tracks[track["id"]] = {
