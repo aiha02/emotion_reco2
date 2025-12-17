@@ -12,6 +12,9 @@ from utils import predict_from_file
 from emotion_state import emotion_state_to_audio_features
 from spotify_recommender import SpotifyRecommender
 
+recommender = SpotifyRecommender(market="JP")
+
+
 # =====================================
 # ページ設定
 # =====================================
