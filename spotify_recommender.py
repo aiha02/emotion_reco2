@@ -1,80 +1,151 @@
 # spotify_recommender.py
-# ============================================
-# Emotion-based Spotify Recommendation Module
-# ============================================
-
 import os
+import numpy as np
 from typing import Dict, List
+
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
+from sklearn.metrics.pairwise import cosine_similarity
 
 
 class SpotifyRecommender:
-    def __init__(
-        self,
-        client_id: str | None = None,
-        client_secret: str | None = None,
-    ):
-        """
-        Spotify Recommendation API 用クラス
-        環境変数 or 引数から認証情報を取得
-        """
-        self.client_id = client_id or os.getenv("SPOTIFY_CLIENT_ID")
-        self.client_secret = client_secret or os.getenv("SPOTIFY_CLIENT_SECRET")
+    """
+    Spotify Audio Features を用いた
+    自前・感情適合楽曲推薦クラス
+    """
 
-        if not self.client_id or not self.client_secret:
-            raise ValueError("Spotify client_id / client_secret が設定されていません")
+    # 使用する audio feature 順序（重要）
+    FEATURE_KEYS = [
+        "valence",
+        "energy",
+        "danceability",
+        "acousticness",
+        "instrumentalness",
+        "tempo",
+    ]
 
-        auth = SpotifyClientCredentials(
-            client_id=self.client_id,
-            client_secret=self.client_secret,
-        )
+    def __init__(self):
+        auth = SpotifyClientCredentials()
         self.sp = spotipy.Spotify(auth_manager=auth)
 
-    # ----------------------------------------
-    # 感情ベース推薦
-    # ----------------------------------------
+        # tempo を他と同スケールにするための正規化用
+        self.tempo_min = 60.0
+        self.tempo_max = 180.0
+
+        # 候補曲を集めるプレイリスト（公式・安全）
+        self.seed_playlists = [
+            "37i9dQZF1DX4WYpdgoIcn6",  # Mood Booster
+            "37i9dQZF1DX3rxVfibe1L0",  # Mood Ring
+            "37i9dQZF1DX889U0CL85jj",  # Life Sucks
+        ]
+
+    # ======================================================
+    # public API
+    # ======================================================
     def recommend_tracks(
         self,
-        audio_features: Dict[str, float],
-        limit: int = 10,
-        seed_genres: List[str] | None = None,
-        market: str = "JP",
+        target_audio_features: Dict[str, float],
+        limit: int = 8,
     ) -> List[Dict]:
+
+        # 1. 目標ベクトル
+        target_vec = self._build_target_vector(target_audio_features)
+
+        # 2. 候補曲収集
+        tracks = self._collect_candidate_tracks()
+
+        if len(tracks) == 0:
+            return []
+
+        # 3. Audio Features 取得
+        track_ids = [t["id"] for t in tracks]
+        features = self.sp.audio_features(track_ids)
+
+        # 4. 類似度計算
+        scored = []
+        for track, feat in zip(tracks, features):
+            if feat is None:
+                continue
+
+            vec = self._feature_dict_to_vector(feat)
+            sim = cosine_similarity(
+                target_vec.reshape(1, -1),
+                vec.reshape(1, -1)
+            )[0][0]
+
+            scored.append((sim, track))
+
+        # 5. 類似度順に並べて返す
+        scored.sort(key=lambda x: x[0], reverse=True)
+        top = scored[:limit]
+
+        return [self._format_track(t) for _, t in top]
+
+    # ======================================================
+    # internal
+    # ======================================================
+    def _collect_candidate_tracks(self, max_tracks: int = 200):
+        tracks = {}
+
+        for pid in self.seed_playlists:
+            results = self.sp.playlist_items(
+                pid,
+                additional_types=["track"],
+                limit=100
+            )
+
+            for item in results["items"]:
+                track = item.get("track")
+                if not track or track["id"] is None:
+                    continue
+
+                tracks[track["id"]] = {
+                    "id": track["id"],
+                    "name": track["name"],
+                    "artist": ", ".join(a["name"] for a in track["artists"]),
+                    "external_url": track["external_urls"]["spotify"],
+                    "preview_url": track["preview_url"],
+                }
+
+                if len(tracks) >= max_tracks:
+                    break
+
+        return list(tracks.values())
+
+    def _build_target_vector(self, audio_features: Dict[str, float]) -> np.ndarray:
         """
-        audio_features:
-          emotion_state_to_audio_features() の出力
-
-        return:
-          track 情報のリスト
+        emotion_state_to_audio_features の出力を
+        推薦用ベクトルに変換
         """
+        vec = []
 
-        if seed_genres is None:
-            # 日本で無難に使えるジャンル
-            seed_genres = ["pop", "rock", "indie"]
+        for k in self.FEATURE_KEYS:
+            if k == "tempo":
+                t = audio_features.get("target_tempo", 120.0)
+                t = (t - self.tempo_min) / (self.tempo_max - self.tempo_min)
+                vec.append(np.clip(t, 0.0, 1.0))
+            else:
+                vec.append(audio_features.get(f"target_{k}", 0.5))
 
-        # Spotify Recommendation API 用パラメータ
-        params = {
-            "limit": limit,
-            "market": market,
-            "seed_genres": seed_genres[:5],  # 最大5
+        return np.array(vec, dtype=np.float32)
+
+    def _feature_dict_to_vector(self, feat: Dict) -> np.ndarray:
+        vec = []
+
+        for k in self.FEATURE_KEYS:
+            if k == "tempo":
+                t = feat["tempo"]
+                t = (t - self.tempo_min) / (self.tempo_max - self.tempo_min)
+                vec.append(np.clip(t, 0.0, 1.0))
+            else:
+                vec.append(feat[k])
+
+        return np.array(vec, dtype=np.float32)
+
+    def _format_track(self, t: Dict) -> Dict:
+        return {
+            "track_name": t["name"],
+            "artist": t["artist"],
+            "external_url": t["external_url"],
+            "preview_url": t["preview_url"],
         }
-
-        # audio feature を target_* として追加
-        for k, v in audio_features.items():
-            params[k] = v
-
-        results = self.sp.recommendations(**params)
-
-        tracks = []
-        for t in results["tracks"]:
-            tracks.append({
-                "track_name": t["name"],
-                "artist": ", ".join(a["name"] for a in t["artists"]),
-                "album": t["album"]["name"],
-                "preview_url": t["preview_url"],
-                "external_url": t["external_urls"]["spotify"],
-                "popularity": t["popularity"],
-            })
-
-        return tracks
