@@ -38,3 +38,7 @@ Thumbs.db
 # ローカル専用のデータセットを無視
 dataset/
 
+# Spotify key
+.env
+
+
