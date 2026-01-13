@@ -272,10 +272,10 @@ class SpotifyRecommender:
     # internal
     # ======================================================
     def _collect_candidate_tracks(self, max_tracks: int = 200):
-        """
+        
         seed_playlists から楽曲候補を収集
         market を明示指定して 404 を回避
-        """
+        
         tracks = {}
 
         for pid in self.seed_playlists:
@@ -309,10 +309,10 @@ class SpotifyRecommender:
         return list(tracks.values())
 
     def _build_target_vector(self, audio_features: Dict[str, float]) -> np.ndarray:
-        """
+        
         emotion_state_to_audio_features の出力を
         推薦用ベクトルに変換
-        """
+        
         vec = []
 
         for k in self.FEATURE_KEYS:
