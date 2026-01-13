@@ -95,8 +95,8 @@ if audio_path:
         recommender = SpotifyRecommender()
         tracks = recommender.recommend_tracks(
             audio_features,
+             emotion_label=pred_label,
             limit=8,
-            candidate_size=40,
         )
 
         for t in tracks:
