@@ -9,11 +9,11 @@ from spotipy.exceptions import SpotifyException
 
 class SpotifyRecommender:
     """
-    Spotify Recommendation API 安定動作版（404完全回避）
+    Spotify Recommendation 安定動作版（genre seed 不使用）
 
-    - 利用可能な genre seed を事前取得
-    - 無効な genre は自動除外
-    - genre が使えない場合は seed_tracks にフォールバック
+    ✔ seed_tracks のみ使用（404回避）
+    ✔ audio features による制御は維持
+    ✔ Client Credentials Flow 完全対応
     """
 
     def __init__(self, market: str = "JP"):
@@ -27,18 +27,6 @@ class SpotifyRecommender:
             auth_manager=SpotifyClientCredentials()
         )
 
-        # Spotify公式が許可している genre seed
-        self.available_genres = set(
-            self.sp.recommendation_genre_seeds()["genres"]
-        )
-
-        # 感情 → genre（候補）
-        self.emotion_to_genres = {
-            "POS": ["pop", "dance", "happy"],
-            "NEU": ["chill", "ambient"],
-            "NEG": ["acoustic", "sad"],
-        }
-
     # ======================================================
     # public
     # ======================================================
@@ -49,60 +37,31 @@ class SpotifyRecommender:
         limit: int = 8,
     ) -> List[Dict]:
 
-        # --------------------------
-        # 1. 有効な genre のみ使用
-        # --------------------------
-        candidate_genres = self.emotion_to_genres.get(
-            emotion_label, ["pop"]
-        )
+        # -----------------------------------------
+        # 1. seed_tracks を取得（必ず成功する）
+        # -----------------------------------------
+        seed_tracks = self._get_seed_tracks(emotion_label)
 
-        seed_genres = [
-            g for g in candidate_genres
-            if g in self.available_genres
-        ]
-
-        # --------------------------
+        # -----------------------------------------
         # 2. Recommendation API
-        # --------------------------
+        # -----------------------------------------
         try:
-            if seed_genres:
-                res = self.sp.recommendations(
-                    seed_genres=seed_genres[:2],  # 多すぎると不安定
-                    target_valence=audio_features.get("target_valence", 0.5),
-                    target_energy=audio_features.get("target_energy", 0.5),
-                    target_danceability=audio_features.get(
-                        "target_danceability", 0.5
-                    ),
-                    limit=limit,
-                    market=self.market,
-                )
-            else:
-                raise SpotifyException(404, -1, "No valid genre seed")
-
-        except SpotifyException:
-            # --------------------------
-            # 3. フォールバック：seed_tracks
-            # --------------------------
-            tracks = self.sp.search(
-                q="top hits",
-                type="track",
-                limit=5,
-                market=self.market,
-            )["tracks"]["items"]
-
-            seed_tracks = [t["id"] for t in tracks]
-
             res = self.sp.recommendations(
-                seed_tracks=seed_tracks[:2],
+                seed_tracks=seed_tracks[:2],  # 1〜2が最安定
                 target_valence=audio_features.get("target_valence", 0.5),
                 target_energy=audio_features.get("target_energy", 0.5),
+                target_danceability=audio_features.get(
+                    "target_danceability", 0.5
+                ),
                 limit=limit,
                 market=self.market,
             )
+        except SpotifyException as e:
+            raise RuntimeError(f"Spotify 推薦失敗: {e}")
 
-        # --------------------------
-        # 4. 整形
-        # --------------------------
+        # -----------------------------------------
+        # 3. 整形
+        # -----------------------------------------
         results = []
         for t in res["tracks"]:
             results.append({
@@ -113,3 +72,27 @@ class SpotifyRecommender:
             })
 
         return results
+
+    # ======================================================
+    # private
+    # ======================================================
+    def _get_seed_tracks(self, emotion_label: str) -> List[str]:
+        """
+        感情ごとに安定した検索クエリを使う
+        """
+        query_map = {
+            "POS": "happy pop",
+            "NEU": "chill",
+            "NEG": "sad acoustic",
+        }
+
+        q = query_map.get(emotion_label, "pop")
+
+        tracks = self.sp.search(
+            q=q,
+            type="track",
+            limit=5,
+            market=self.market,
+        )["tracks"]["items"]
+
+        return [t["id"] for t in tracks]
