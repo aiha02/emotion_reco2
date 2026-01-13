@@ -96,6 +96,7 @@ if audio_path:
         tracks = recommender.recommend_tracks(
             audio_features,
             limit=8,
+            candidate_size=40,
         )
 
         for t in tracks:
