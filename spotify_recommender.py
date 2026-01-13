@@ -192,13 +192,12 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 
 class SpotifyRecommender:
-    """
+    
     Spotify Audio Features を用いた
     自前・感情適合楽曲推薦クラス
 
     - Client Credentials Flow を使用
     - market を明示指定（地域制限による 404 対策）
-    """
 
     # 使用する audio feature 順序（重要）
     FEATURE_KEYS = [
