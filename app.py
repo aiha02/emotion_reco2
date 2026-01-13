@@ -1,209 +1,117 @@
-# spotify_recommender.py
+# app.py
+from dotenv import load_dotenv
+load_dotenv()
+
+import streamlit as st
+import tempfile
 import os
 import numpy as np
-from typing import Dict, List
+import matplotlib.pyplot as plt
 
-import spotipy
-from spotipy.oauth2 import SpotifyClientCredentials
-from spotipy.exceptions import SpotifyException
-from sklearn.metrics.pairwise import cosine_similarity
+from utils import predict_from_file
+from emotion_state import emotion_state_to_audio_features
+from spotify_recommender import SpotifyRecommender
 
+# =====================================
+# ページ設定
+# =====================================
+st.set_page_config(
+    page_title="音声感情 × Spotify 楽曲推薦",
+    layout="centered",
+)
 
-class SpotifyRecommender:
+st.title("🎙️ 音声感情認識 × 🎵 Spotify 楽曲推薦")
+st.markdown(
     """
-    Spotify Search API + Audio Features を用いた
-    感情適合型楽曲推薦クラス（403対策・安定動作版）
+音声から **感情・強度** を推定し、  
+その感情状態に合わせた **Spotify 楽曲** を推薦します。
+"""
+)
 
-    - Recommendation API は使用しない
-    - Search API で候補曲を収集
-    - Audio Features を安全にバッチ取得
-    - 感情特徴ベクトルとのコサイン類似度で再ランキング
-    """
+# =====================================
+# 音声アップロード
+# =====================================
+uploaded = st.file_uploader(
+    "音声ファイルをアップロード（wav / mp3）",
+    type=["wav", "mp3", "m4a", "ogg"],
+)
 
-    # 使用する Audio Features（順序重要）
-    FEATURE_KEYS = [
-        "valence",
-        "energy",
-        "danceability",
-        "acousticness",
-        "instrumentalness",
-        "tempo",
-    ]
+audio_path = None
+if uploaded:
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    tmp.write(uploaded.read())
+    tmp.close()
+    audio_path = tmp.name
 
-    def __init__(self, market: str = "JP"):
-        # ===============================
-        # 環境変数チェック（重要）
-        # ===============================
-        if not os.getenv("SPOTIPY_CLIENT_ID"):
-            raise RuntimeError("SPOTIPY_CLIENT_ID が設定されていません")
-        if not os.getenv("SPOTIPY_CLIENT_SECRET"):
-            raise RuntimeError("SPOTIPY_CLIENT_SECRET が設定されていません")
+# =====================================
+# 推論
+# =====================================
+if audio_path:
+    st.audio(audio_path)
 
-        self.market = market
+    with st.spinner("🎧 感情を解析しています..."):
+        pred_label, proba, labels = predict_from_file(audio_path)
 
-        auth = SpotifyClientCredentials()
-        self.sp = spotipy.Spotify(auth_manager=auth)
+    # -----------------------------
+    # 感情確率の表示
+    # -----------------------------
+    st.subheader("📊 感情推定結果")
 
-        # tempo 正規化用
-        self.tempo_min = 60.0
-        self.tempo_max = 180.0
+    prob_dict = dict(zip(labels, proba))
+    st.write("**予測感情:**", pred_label)
 
-        # Search API 用の安定クエリ
-        self.search_queries = [
-            "mood",
-            "emotion",
-            "chill",
-            "happy",
-            "sad",
-            "relax",
-        ]
+    fig, ax = plt.subplots(figsize=(6, 3))
+    ax.bar(prob_dict.keys(), prob_dict.values())
+    ax.set_ylim(0, 1)
+    ax.set_ylabel("Probability")
+    ax.set_title("Emotion Probability")
+    st.pyplot(fig)
 
-    # ======================================================
-    # public API
-    # ======================================================
-    def recommend_tracks(
-        self,
-        target_audio_features: Dict[str, float],
-        limit: int = 8,
-        candidate_size: int = 120,
-    ) -> List[Dict]:
-        """
-        感情推定結果から楽曲推薦を行う
-        """
+    # -----------------------------
+    # 強度（疑似推定）
+    # -----------------------------
+    intensity = np.max(proba) * 5.0
+    st.subheader("🔥 感情強度")
+    st.progress(intensity / 5.0)
+    st.write(f"推定強度: **{intensity:.2f} / 5**")
 
-        # 1. 感情 → 目標ベクトル
-        target_vec = self._build_target_vector(target_audio_features)
+    # -----------------------------
+    # 感情 → Audio Feature
+    # -----------------------------
+    audio_features = emotion_state_to_audio_features(
+        emotion_probs=prob_dict,
+        intensity=intensity,
+    )
 
-        # 2. 候補曲収集
-        candidates = self._collect_candidate_tracks(
-            max_tracks=candidate_size
+    st.subheader("🎚️ 推薦用オーディオ特徴量")
+    st.json(audio_features)
+
+    # -----------------------------
+    # Spotify 推薦
+    # -----------------------------
+    st.subheader("🎵 おすすめ楽曲")
+
+    try:
+        recommender = SpotifyRecommender()
+        tracks = recommender.recommend_tracks(
+            audio_features,
+            limit=8,
         )
 
-        if not candidates:
-            return []
-
-        # 3. Audio Features を安全にバッチ取得
-        track_ids = [t["id"] for t in candidates]
-        features = self._get_audio_features_batched(track_ids)
-
-        # 4. コサイン類似度による再ランキング
-        scored = []
-        for track, feat in zip(candidates, features):
-            if feat is None:
-                continue
-
-            vec = self._feature_dict_to_vector(feat)
-            sim = cosine_similarity(
-                target_vec.reshape(1, -1),
-                vec.reshape(1, -1),
-            )[0][0]
-
-            scored.append((sim, track))
-
-        # 5. 類似度順に上位を返す
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return [self._format_track(t) for _, t in scored[:limit]]
-
-    # ======================================================
-    # internal
-    # ======================================================
-    def _collect_candidate_tracks(self, max_tracks: int = 120) -> List[Dict]:
-        """
-        Search API により候補楽曲を収集
-        - is_local=True の曲は除外（403対策）
-        """
-        tracks = {}
-
-        for q in self.search_queries:
-            results = self.sp.search(
-                q=q,
-                type="track",
-                limit=20,
-                market=None,  # market制限を外す（重要）
+        for t in tracks:
+            st.markdown(
+                f"🎶 **{t['track_name']}**  \n"
+                f"👤 {t['artist']}  \n"
+                f"[🔗 Spotifyで開く]({t['external_url']})"
             )
+            if t["preview_url"]:
+                st.audio(t["preview_url"])
+            st.markdown("---")
 
-            for t in results["tracks"]["items"]:
-                if t["is_local"]:
-                    continue
+    except Exception as e:
+        st.error(f"Spotify 推薦でエラーが発生しました: {e}")
 
-                if t["id"] not in tracks:
-                    tracks[t["id"]] = {
-                        "id": t["id"],
-                        "name": t["name"],
-                        "artist": ", ".join(a["name"] for a in t["artists"]),
-                        "external_url": t["external_urls"]["spotify"],
-                        "preview_url": t["preview_url"],
-                    }
+else:
+    st.info("音声ファイルをアップロードしてください。")
 
-                if len(tracks) >= max_tracks:
-                    break
-
-            if len(tracks) >= max_tracks:
-                break
-
-        return list(tracks.values())
-
-    def _get_audio_features_batched(
-        self,
-        track_ids: List[str],
-        batch_size: int = 50,  # 安全のため50
-    ) -> List[Dict]:
-        """
-        Audio Features API 制約対応（403耐性あり）
-        """
-        all_features = []
-
-        for i in range(0, len(track_ids), batch_size):
-            batch = track_ids[i : i + batch_size]
-            try:
-                feats = self.sp.audio_features(batch)
-                for f in feats:
-                    all_features.append(f)
-            except SpotifyException as e:
-                print("Audio features error, skip batch:", e)
-                all_features.extend([None] * len(batch))
-
-        return all_features
-
-    def _build_target_vector(self, af: Dict[str, float]) -> np.ndarray:
-        """
-        感情推定結果 → 推薦用特徴ベクトル
-        """
-        vec = []
-
-        for k in self.FEATURE_KEYS:
-            if k == "tempo":
-                t = af.get("target_tempo", 120.0)
-                t = (t - self.tempo_min) / (self.tempo_max - self.tempo_min)
-                vec.append(np.clip(t, 0.0, 1.0))
-            else:
-                vec.append(af.get(f"target_{k}", 0.5))
-
-        return np.array(vec, dtype=np.float32)
-
-    def _feature_dict_to_vector(self, feat: Dict) -> np.ndarray:
-        """
-        Spotify Audio Features → 推薦用特徴ベクトル
-        """
-        vec = []
-
-        for k in self.FEATURE_KEYS:
-            if k == "tempo":
-                t = feat["tempo"]
-                t = (t - self.tempo_min) / (self.tempo_max - self.tempo_min)
-                vec.append(np.clip(t, 0.0, 1.0))
-            else:
-                vec.append(feat[k])
-
-        return np.array(vec, dtype=np.float32)
-
-    def _format_track(self, t: Dict) -> Dict:
-        """
-        出力形式を統一
-        """
-        return {
-            "track_name": t["name"],
-            "artist": t["artist"],
-            "external_url": t["external_url"],
-            "preview_url": t["preview_url"],
-        }
+st.caption("© Graduation Research Demo | Emotion-based Music Recommendation")
