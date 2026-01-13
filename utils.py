@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import joblib
-import librosa
+
 from feature_extractor import extract_feature_raw
 
 # ============================
@@ -20,6 +20,7 @@ _model = None
 _scaler = None
 _labels = None
 
+
 def _ensure_files_exist():
     missing = []
     for p in (MODEL_PATH, SCALER_PATH, LABELS_PATH):
@@ -28,21 +29,26 @@ def _ensure_files_exist():
     if missing:
         raise FileNotFoundError(f"Missing model files: {missing}")
 
+
 def load_model():
     """
     モデル・スケーラ・ラベルを一度だけロード（キャッシュ）
     """
     global _model, _scaler, _labels
+
     if _model is None or _scaler is None or _labels is None:
         _ensure_files_exist()
         _model = joblib.load(MODEL_PATH)
         _scaler = joblib.load(SCALER_PATH)
         _labels = np.load(LABELS_PATH, allow_pickle=True).tolist()
+
     return _model, _scaler, _labels
+
 
 def predict_from_file(file_path):
     """
     音声ファイル → 特徴量 → スケーリング → 感情予測
+
     戻り値:
       pred_label : str
       proba      : np.ndarray | None
@@ -50,14 +56,15 @@ def predict_from_file(file_path):
     """
     model, scaler, labels = load_model()
 
-    # 音声ロード
-    y, sr = librosa.load(file_path, sr=None, mono=True)
-
-    # 特徴量抽出（学習と同一）
-    feat = extract_feature_raw(y, sr)
+    # ============================
+    # 特徴量抽出（file_pathを渡す）
+    # ============================
+    feat = extract_feature_raw(file_path)
     X = scaler.transform([feat])
 
+    # ============================
     # 予測
+    # ============================
     raw_pred = model.predict(X)[0]
 
     try:
@@ -65,7 +72,6 @@ def predict_from_file(file_path):
     except Exception:
         proba = None
 
-    # ラベル整形（SVC は文字列を直接返す想定）
     pred_label = str(raw_pred)
 
     return pred_label, proba, labels
