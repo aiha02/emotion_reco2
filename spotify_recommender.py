@@ -111,9 +111,8 @@ class SpotifyRecommender:
         """
 
         results = self.sp.recommendations(
-            seed_genres=self.seed_genres[:3],
+            seed_genres=["pop"],
             limit=limit,
-            market=self.market,
             target_valence=target_audio_features.get("target_valence", 0.5),
             target_energy=target_audio_features.get("target_energy", 0.5),
             target_danceability=target_audio_features.get("target_danceability", 0.5),
