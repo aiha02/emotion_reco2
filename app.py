@@ -8,14 +8,10 @@ import os
 import numpy as np 
 import matplotlib.pyplot as plt
 
-from utils 
-import predict_from_file 
-from emotion_state 
-import emotion_state_to_audio_features 
-from spotify_recommender 
-import SpotifyRecommender
-import spotify_recommender
-st.write("SpotifyRecommender loaded from:", spotify_recommender.__file__)
+from utils import predict_from_file 
+from emotion_state import emotion_state_to_audio_features 
+from spotify_recommender import SpotifyRecommender
+recommender = SpotifyRecommender(market="JP")
 
 
 st.set_page_config( page_title="音声感情 × Spotify 楽曲推薦", layout="centered", )
