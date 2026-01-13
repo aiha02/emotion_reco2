@@ -1,21 +1,23 @@
 # spotify_recommender.py
+import os
 import numpy as np
 from typing import Dict, List
 
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
+from spotipy.exceptions import SpotifyException
 from sklearn.metrics.pairwise import cosine_similarity
 
 
 class SpotifyRecommender:
     """
     Spotify Search API + Audio Features を用いた
-    感情適合型楽曲推薦クラス（安定動作版）
+    感情適合型楽曲推薦クラス（403対策・安定動作版）
 
-    - Recommendation API は使用しない（404/再現性問題回避）
+    - Recommendation API は使用しない
     - Search API で候補曲を収集
-    - Audio Features を 100 曲ずつバッチ取得
-    - 感情スコアと音響特徴量のコサイン類似度で再ランキング
+    - Audio Features を安全にバッチ取得
+    - 感情特徴ベクトルとのコサイン類似度で再ランキング
     """
 
     # 使用する Audio Features（順序重要）
@@ -29,6 +31,14 @@ class SpotifyRecommender:
     ]
 
     def __init__(self, market: str = "JP"):
+        # ===============================
+        # 環境変数チェック（重要）
+        # ===============================
+        if not os.getenv("SPOTIPY_CLIENT_ID"):
+            raise RuntimeError("SPOTIPY_CLIENT_ID が設定されていません")
+        if not os.getenv("SPOTIPY_CLIENT_SECRET"):
+            raise RuntimeError("SPOTIPY_CLIENT_SECRET が設定されていません")
+
         self.market = market
 
         auth = SpotifyClientCredentials()
@@ -38,7 +48,7 @@ class SpotifyRecommender:
         self.tempo_min = 60.0
         self.tempo_max = 180.0
 
-        # Search API 用の検索クエリ（安定）
+        # Search API 用の安定クエリ
         self.search_queries = [
             "mood",
             "emotion",
@@ -72,7 +82,7 @@ class SpotifyRecommender:
         if not candidates:
             return []
 
-        # 3. Audio Features をバッチ取得（最大100件ずつ）
+        # 3. Audio Features を安全にバッチ取得
         track_ids = [t["id"] for t in candidates]
         features = self._get_audio_features_batched(track_ids)
 
@@ -100,6 +110,7 @@ class SpotifyRecommender:
     def _collect_candidate_tracks(self, max_tracks: int = 120) -> List[Dict]:
         """
         Search API により候補楽曲を収集
+        - is_local=True の曲は除外（403対策）
         """
         tracks = {}
 
@@ -108,10 +119,13 @@ class SpotifyRecommender:
                 q=q,
                 type="track",
                 limit=20,
-                market=self.market,
+                market=None,  # market制限を外す（重要）
             )
 
             for t in results["tracks"]["items"]:
+                if t["is_local"]:
+                    continue
+
                 if t["id"] not in tracks:
                     tracks[t["id"]] = {
                         "id": t["id"],
@@ -132,17 +146,22 @@ class SpotifyRecommender:
     def _get_audio_features_batched(
         self,
         track_ids: List[str],
-        batch_size: int = 100,
+        batch_size: int = 50,  # 安全のため50
     ) -> List[Dict]:
         """
-        Audio Features API 制約（最大100件）対応
+        Audio Features API 制約対応（403耐性あり）
         """
         all_features = []
 
         for i in range(0, len(track_ids), batch_size):
             batch = track_ids[i : i + batch_size]
-            feats = self.sp.audio_features(batch)
-            all_features.extend(feats)
+            try:
+                feats = self.sp.audio_features(batch)
+                for f in feats:
+                    all_features.append(f)
+            except SpotifyException as e:
+                print("Audio features error, skip batch:", e)
+                all_features.extend([None] * len(batch))
 
         return all_features
 
