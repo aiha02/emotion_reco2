@@ -14,7 +14,7 @@ def extract_feature_raw(file_path: str, duration: float = 15.0) -> np.ndarray:
         duration=duration
     )
 
-    y, _ = librosa.effects.trim(y, top_db=30)
+  #  y, _ = librosa.effects.trim(y, top_db=30)
 
     return extract_features(y, sr)
 
