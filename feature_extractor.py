@@ -1,50 +1,93 @@
 import numpy as np
 import librosa
 
-def extract_feature_raw(y, sr):
+
+def extract_features(
+    y: np.ndarray,
+    sr: int
+) -> np.ndarray:
     """
-    MFCC(40) + ΔMFCC(40) + ΔΔMFCC(40)
-    + Chroma(12) + Mel(128)
-    = 260次元
+    音声波形から感情推定用の特徴量を抽出する
+    改善点：
+    - 平均＋標準偏差を使用
+    - 無音区間除去後の特徴量
     """
 
+    features = []
+
+    # =========================
     # MFCC
-    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=40)
+    # =========================
+    mfcc = librosa.feature.mfcc(
+        y=y,
+        sr=sr,
+        n_mfcc=40
+    )
+    features.extend(np.mean(mfcc, axis=1))
+    features.extend(np.std(mfcc, axis=1))
 
-    # Δ / ΔΔ
-    delta = librosa.feature.delta(mfcc)
-    delta2 = librosa.feature.delta(mfcc, order=2)
-
-    # 時間平均
-    mfcc_mean = np.mean(mfcc.T, axis=0)
-    delta_mean = np.mean(delta.T, axis=0)
-    delta2_mean = np.mean(delta2.T, axis=0)
-
+    # =========================
     # Chroma
-    stft = np.abs(librosa.stft(y))
-    chroma = np.mean(
-        librosa.feature.chroma_stft(S=stft, sr=sr).T,
-        axis=0
+    # =========================
+    chroma = librosa.feature.chroma_stft(
+        y=y,
+        sr=sr
+    )
+    features.extend(np.mean(chroma, axis=1))
+    features.extend(np.std(chroma, axis=1))
+
+    # =========================
+    # Spectral features
+    # =========================
+    spec_centroid = librosa.feature.spectral_centroid(
+        y=y,
+        sr=sr
+    )
+    features.append(np.mean(spec_centroid))
+    features.append(np.std(spec_centroid))
+
+    spec_bandwidth = librosa.feature.spectral_bandwidth(
+        y=y,
+        sr=sr
+    )
+    features.append(np.mean(spec_bandwidth))
+    features.append(np.std(spec_bandwidth))
+
+    # =========================
+    # Energy
+    # =========================
+    rms = librosa.feature.rms(y=y)
+    features.append(np.mean(rms))
+    features.append(np.std(rms))
+
+    return np.array(features, dtype=np.float32)
+
+
+def extract_features_from_file(
+    file_path: str,
+    duration: float = 15.0
+) -> np.ndarray:
+    """
+    音声ファイルから特徴量を抽出する
+    - 無音区間除去
+    - 最大15秒（感情差を出しやすい）
+    """
+
+    # 音声読み込み
+    y, sr = librosa.load(
+        file_path,
+        sr=None,
+        mono=True,
+        duration=duration
     )
 
-    # Mel
-    mel = np.mean(
-        librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128).T,
-        axis=0
+    # 無音除去（超重要）
+    y, _ = librosa.effects.trim(
+        y,
+        top_db=30
     )
 
-    return np.hstack([
-        mfcc_mean,
-        delta_mean,
-        delta2_mean,
-        chroma,
-        mel
-    ])
+    # デバッグ用（必要ならコメントアウト）
+    # print("Audio std:", np.std(y))
 
-
-def extract_feature(file_path):
-    """
-    wav / mp3 ファイル用（Streamlit・utils 互換）
-    """
-    y, sr = librosa.load(file_path, sr=None, mono=True)
-    return extract_feature_raw(y, sr)
+    return extract_features(y, sr)
