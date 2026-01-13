@@ -4,16 +4,12 @@ load_dotenv()
 
 import streamlit as st
 import tempfile
-import os
 import numpy as np
 import matplotlib.pyplot as plt
 
 from utils import predict_from_file
 from emotion_state import emotion_state_to_audio_features
 from spotify_recommender import SpotifyRecommender
-
-recommender = SpotifyRecommender(market="JP")
-
 
 # =====================================
 # ページ設定
@@ -24,16 +20,7 @@ st.set_page_config(
 )
 
 st.title("🎙️ 音声感情認識 × 🎵 Spotify 楽曲推薦")
-st.markdown(
-    """
-音声から **感情・強度** を推定し、  
-その感情状態に合わせた **Spotify 楽曲** を推薦します。
-"""
-)
 
-# =====================================
-# 音声アップロード
-# =====================================
 uploaded = st.file_uploader(
     "音声ファイルをアップロード（wav / mp3）",
     type=["wav", "mp3", "m4a", "ogg"],
@@ -46,59 +33,27 @@ if uploaded:
     tmp.close()
     audio_path = tmp.name
 
-# =====================================
-# 推論
-# =====================================
 if audio_path:
     st.audio(audio_path)
 
-    with st.spinner("🎧 感情を解析しています..."):
-        pred_label, proba, labels = predict_from_file(audio_path)
-
-    # -----------------------------
-    # 感情確率の表示
-    # -----------------------------
-    st.subheader("📊 感情推定結果")
-
+    pred_label, proba, labels = predict_from_file(audio_path)
     prob_dict = dict(zip(labels, proba))
-    st.write("**予測感情:**", pred_label)
 
-    fig, ax = plt.subplots(figsize=(6, 3))
-    ax.bar(prob_dict.keys(), prob_dict.values())
-    ax.set_ylim(0, 1)
-    ax.set_ylabel("Probability")
-    ax.set_title("Emotion Probability")
-    st.pyplot(fig)
-
-    # -----------------------------
-    # 強度（疑似推定）
-    # -----------------------------
     intensity = np.max(proba) * 5.0
-    st.subheader("🔥 感情強度")
-    st.progress(intensity / 5.0)
-    st.write(f"推定強度: **{intensity:.2f} / 5**")
 
-    # -----------------------------
-    # 感情 → Audio Feature
-    # -----------------------------
     audio_features = emotion_state_to_audio_features(
         emotion_probs=prob_dict,
         intensity=intensity,
     )
 
-    st.subheader("🎚️ 推薦用オーディオ特徴量")
-    st.json(audio_features)
-
-    # -----------------------------
-    # Spotify 推薦
-    # -----------------------------
     st.subheader("🎵 おすすめ楽曲")
 
     try:
-        recommender = SpotifyRecommender()
+        recommender = SpotifyRecommender(market="JP")
         tracks = recommender.recommend_tracks(
             audio_features,
             limit=8,
+            candidate_size=80,
         )
 
         for t in tracks:
@@ -113,8 +68,3 @@ if audio_path:
 
     except Exception as e:
         st.error(f"Spotify 推薦でエラーが発生しました: {e}")
-
-else:
-    st.info("音声ファイルをアップロードしてください。")
-
-st.caption("© Graduation Research Demo | Emotion-based Music Recommendation")
